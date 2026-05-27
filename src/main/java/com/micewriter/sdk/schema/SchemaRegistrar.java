@@ -98,7 +98,7 @@ public class SchemaRegistrar implements ApplicationListener<ContextRefreshedEven
     }
 
     /** Prepend the 1-byte message type discriminant. The 4-byte length prefix is added by UdsConnection. */
-    static byte[] prependTypeByte(byte type, byte[] body) {
+    public static byte[] prependTypeByte(byte type, byte[] body) {
         byte[] payload = new byte[1 + body.length];
         payload[0] = type;
         System.arraycopy(body, 0, payload, 1, body.length);

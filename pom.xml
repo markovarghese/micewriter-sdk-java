@@ -54,14 +54,23 @@
             <artifactId>netty-handler</artifactId>
         </dependency>
 
-        <!-- JSON serialization for IPC messages -->
+        <!-- JSON serialization for REGISTER_SCHEMA and ACK messages -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
         </dependency>
+
+        <!-- Apache Arrow: Arrow IPC serialization for INGEST_RECORD hot path -->
+        <!-- ArrowStreamWriter lives in arrow-vector; there is no separate arrow-ipc jar -->
         <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jsr310</artifactId>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-vector</artifactId>
+            <version>17.0.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-memory-netty</artifactId>
+            <version>17.0.0</version>
         </dependency>
 
         <!-- Test -->
