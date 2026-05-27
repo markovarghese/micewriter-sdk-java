@@ -6,22 +6,19 @@ import com.micewriter.sdk.ipc.AckResponse;
 import com.micewriter.sdk.ipc.UdsConnection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.config.BeanDefinition;
-import org.springframework.context.ApplicationListener;
-import org.springframework.context.event.ContextRefreshedEvent;
-import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
-import org.springframework.core.type.filter.AnnotationTypeFilter;
 
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Scans the classpath for {@link IcebergEntity}-annotated classes on
- * {@link ContextRefreshedEvent} and sends one {@code REGISTER_SCHEMA} IPC message
- * per discovered entity to ensure the engine has created the corresponding Iceberg
- * table before the first record is written.
+ * Registers Iceberg table schemas with the micewriter-engine over UDS.
+ *
+ * <p>This is the framework-agnostic core. Call {@link #register(Class[])} directly
+ * to register a fixed set of entity classes — no classpath scanning required.
+ * Framework-specific integrations (Spring Boot, Dropwizard) wrap this class and
+ * supply the entity list via their own lifecycle hooks.
  */
-public class SchemaRegistrar implements ApplicationListener<ContextRefreshedEvent> {
+public class SchemaRegistrar {
 
     private static final Logger log = LoggerFactory.getLogger(SchemaRegistrar.class);
 
@@ -29,44 +26,46 @@ public class SchemaRegistrar implements ApplicationListener<ContextRefreshedEven
     private static final byte MSG_REGISTER_SCHEMA = 0x01;
 
     private final UdsConnection connection;
-    private final String basePackage;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    /** Guard against double-registration on multi-context Spring Boot apps. */
+    /** Guards against double-registration when called more than once. */
     private final AtomicBoolean registered = new AtomicBoolean(false);
 
-    public SchemaRegistrar(UdsConnection connection, String basePackage) {
+    public SchemaRegistrar(UdsConnection connection) {
         this.connection = connection;
-        this.basePackage = basePackage;
     }
 
-    @Override
-    public void onApplicationEvent(ContextRefreshedEvent event) {
+    /**
+     * Register a fixed set of {@link IcebergEntity}-annotated classes.
+     * Idempotent — subsequent calls after the first are no-ops.
+     *
+     * @param entityClasses classes annotated with {@link IcebergEntity}
+     */
+    public void register(Class<?>... entityClasses) {
         if (!registered.compareAndSet(false, true)) {
             return;
         }
-
-        ClassPathScanningCandidateComponentProvider scanner =
-                new ClassPathScanningCandidateComponentProvider(false);
-        scanner.addIncludeFilter(new AnnotationTypeFilter(IcebergEntity.class));
-
-        Set<BeanDefinition> candidates = scanner.findCandidateComponents(basePackage);
-        log.info("Found {} @IcebergEntity class(es) to register", candidates.size());
-
-        for (BeanDefinition bd : candidates) {
+        log.info("Registering {} @IcebergEntity class(es)", entityClasses.length);
+        for (Class<?> clazz : entityClasses) {
             try {
-                Class<?> clazz = Class.forName(bd.getBeanClassName());
                 registerSchema(clazz);
             } catch (Exception e) {
-                log.error("Schema registration failed for {}: {}", bd.getBeanClassName(), e.getMessage(), e);
+                log.error("Schema registration failed for {}: {}", clazz.getName(), e.getMessage(), e);
             }
         }
     }
 
     // -------------------------------------------------------------------------
+    // Internal
+    // -------------------------------------------------------------------------
 
     private void registerSchema(Class<?> clazz) throws Exception {
         IcebergEntity ann = clazz.getAnnotation(IcebergEntity.class);
+        if (ann == null) {
+            log.warn("Skipping {} — not annotated with @IcebergEntity", clazz.getName());
+            return;
+        }
+
         String tableName = ann.table().isEmpty()
                 ? clazz.getSimpleName().toLowerCase(Locale.ROOT)
                 : ann.table();
@@ -76,9 +75,8 @@ public class SchemaRegistrar implements ApplicationListener<ContextRefreshedEven
             Map<String, Object> fieldDef = new LinkedHashMap<>();
             fieldDef.put("name", f.getName());
             fieldDef.put("type", PojoInspector.javaTypeToIcebergType(f.getType()));
-            fieldDef.put("required", !f.getType().isPrimitive()
-                    ? f.isAnnotationPresent(com.micewriter.sdk.annotation.IcebergId.class)
-                    : true);
+            fieldDef.put("required", f.getType().isPrimitive()
+                    || f.isAnnotationPresent(com.micewriter.sdk.annotation.IcebergId.class));
             fields.add(fieldDef);
         }
 

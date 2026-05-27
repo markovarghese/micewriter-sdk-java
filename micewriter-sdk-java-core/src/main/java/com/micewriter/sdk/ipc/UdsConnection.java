@@ -56,10 +56,10 @@ public class UdsConnection implements Closeable {
     // -------------------------------------------------------------------------
 
     /**
-     * Send a raw IPC payload (type discriminant byte + JSON body) to the engine
+     * Send a raw IPC payload (type discriminant byte + body) to the engine
      * and block until an ACK is received or {@code ackTimeoutMs} elapses.
      *
-     * @param payload  1 byte message type + JSON body bytes
+     * @param payload  1 byte message type + body bytes
      * @return         the engine's ACK response
      * @throws RuntimeException on timeout, channel error, or engine-reported error
      */

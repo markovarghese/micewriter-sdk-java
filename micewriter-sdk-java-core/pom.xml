@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.micewriter</groupId>
+        <artifactId>micewriter-sdk-java</artifactId>
+        <version>0.2.0</version>
+    </parent>
+
+    <artifactId>micewriter-sdk-java-core</artifactId>
+    <packaging>jar</packaging>
+    <description>mIceWriter SDK — framework-agnostic core (zero Spring/Dropwizard deps)</description>
+
+    <dependencies>
+        <!-- Netty Epoll UDS transport (Linux only — required inside containers) -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport-classes-epoll</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport-native-epoll</artifactId>
+            <classifier>linux-x86_64</classifier>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-codec</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-handler</artifactId>
+        </dependency>
+
+        <!-- JSON for REGISTER_SCHEMA messages and ACK deserialization -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+        <!-- Arrow IPC for INGEST_RECORD hot-path serialization -->
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-vector</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-memory-netty</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

@@ -28,7 +28,7 @@ public final class PojoInspector {
      * Map a Java field type to the Iceberg primitive type string used in
      * {@code REGISTER_SCHEMA} JSON messages.
      */
-    static String javaTypeToIcebergType(Class<?> type) {
+    public static String javaTypeToIcebergType(Class<?> type) {
         if (type == String.class)                                        return "string";
         if (type == long.class    || type == Long.class)                 return "long";
         if (type == int.class     || type == Integer.class)              return "int";
@@ -150,7 +150,6 @@ public final class PojoInspector {
         } else if (vector instanceof VarBinaryVector v) {
             v.setSafe(index, (byte[]) value);
         } else {
-            // Fallback: toString into the vector (covers unknown Utf8-mapped types)
             if (vector instanceof VarCharVector vc) {
                 vc.setSafe(index, value.toString().getBytes(StandardCharsets.UTF_8));
             }

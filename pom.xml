@@ -4,6 +4,11 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
+    <!--
+        Spring Boot starter-parent is used at the root so its BOM manages
+        common library versions (Netty, Jackson, JUnit) across all modules.
+        Spring classes are only pulled onto the classpath in micewriter-sdk-java-spring.
+    -->
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
@@ -13,73 +18,42 @@
 
     <groupId>com.micewriter</groupId>
     <artifactId>micewriter-sdk-java</artifactId>
-    <version>0.1.0</version>
-    <packaging>jar</packaging>
-    <description>Spring Boot Starter SDK for the mIceWriter telemetry ingestion pipeline</description>
+    <version>0.2.0</version>
+    <packaging>pom</packaging>
+    <description>mIceWriter SDK — multi-module parent (core / Spring Boot starter / Dropwizard bundle)</description>
+
+    <modules>
+        <module>micewriter-sdk-java-core</module>
+        <module>micewriter-sdk-java-spring</module>
+        <module>micewriter-sdk-java-dropwizard</module>
+    </modules>
 
     <properties>
         <java.version>17</java.version>
+        <arrow.version>17.0.0</arrow.version>
+        <dropwizard.version>4.0.7</dropwizard.version>
     </properties>
 
-    <dependencies>
-        <!-- Spring Boot autoconfiguration infrastructure (no web server pulled in) -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-autoconfigure</artifactId>
-        </dependency>
-        <!-- Generates META-INF/spring-configuration-metadata.json for IDE hints -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-configuration-processor</artifactId>
-            <optional>true</optional>
-        </dependency>
-
-        <!-- Netty Epoll UDS transport (Linux only — required inside containers) -->
-        <dependency>
-            <groupId>io.netty</groupId>
-            <artifactId>netty-transport-classes-epoll</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.netty</groupId>
-            <artifactId>netty-transport-native-epoll</artifactId>
-            <classifier>linux-x86_64</classifier>
-        </dependency>
-        <!-- Netty codec for LengthFieldBasedFrameDecoder -->
-        <dependency>
-            <groupId>io.netty</groupId>
-            <artifactId>netty-codec</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.netty</groupId>
-            <artifactId>netty-handler</artifactId>
-        </dependency>
-
-        <!-- JSON serialization for REGISTER_SCHEMA and ACK messages -->
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-        </dependency>
-
-        <!-- Apache Arrow: Arrow IPC serialization for INGEST_RECORD hot path -->
-        <!-- ArrowStreamWriter lives in arrow-vector; there is no separate arrow-ipc jar -->
-        <dependency>
-            <groupId>org.apache.arrow</groupId>
-            <artifactId>arrow-vector</artifactId>
-            <version>17.0.0</version>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.arrow</groupId>
-            <artifactId>arrow-memory-netty</artifactId>
-            <version>17.0.0</version>
-        </dependency>
-
-        <!-- Test -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-    </dependencies>
+    <!-- Centralise versions for libraries not covered by the Spring Boot BOM -->
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.apache.arrow</groupId>
+                <artifactId>arrow-vector</artifactId>
+                <version>${arrow.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.arrow</groupId>
+                <artifactId>arrow-memory-netty</artifactId>
+                <version>${arrow.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.dropwizard</groupId>
+                <artifactId>dropwizard-core</artifactId>
+                <version>${dropwizard.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <build>
         <plugins>

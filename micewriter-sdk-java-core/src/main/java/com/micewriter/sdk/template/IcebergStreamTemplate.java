@@ -19,12 +19,7 @@ import java.util.Locale;
  * Primary SDK entry point for application code.
  *
  * <pre>{@code
- * @Autowired
- * private IcebergStreamTemplate icebergTemplate;
- *
- * public void handleEvent(TelemetryEvent event) {
- *     icebergTemplate.send(event);
- * }
+ * icebergTemplate.send(event);
  * }</pre>
  *
  * Each call serializes the POJO as an Apache Arrow IPC RecordBatch, frames it
