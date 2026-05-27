@@ -1,0 +1,17 @@
+# Maven build output
+target/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+*.class
+
+# Claude Code session data
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
