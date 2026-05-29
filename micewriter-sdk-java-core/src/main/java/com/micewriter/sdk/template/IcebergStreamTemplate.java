@@ -35,6 +35,9 @@ public class IcebergStreamTemplate implements Closeable {
     /** Must match {@code MSG_INGEST_RECORD} in the Rust engine's protocol.rs. */
     private static final byte MSG_INGEST_RECORD = 0x02;
 
+    /** Must match {@code MSG_FLUSH_NOW} in the Rust engine's protocol.rs. */
+    private static final byte MSG_FLUSH_NOW = 0x03;
+
     /** Matches {@code MAX_PAYLOAD_SIZE} enforced by the engine's UDS server. */
     private static final int MAX_PAYLOAD_BYTES = 128 * 1024 * 1024;
 
@@ -97,6 +100,20 @@ public class IcebergStreamTemplate implements Closeable {
         if (!ack.isOk()) {
             throw new RuntimeException(
                     "Engine rejected record for table '" + tableName + "': " + ack.getMsg());
+        }
+    }
+
+    /**
+     * Force the engine to immediately compile and commit all buffered records.
+     * This is intended for end-to-end testing synchronization.
+     *
+     * @throws RuntimeException if the engine rejects the request (e.g., manual flush is disabled)
+     */
+    public void flushNow() {
+        byte[] payload = new byte[] { MSG_FLUSH_NOW };
+        AckResponse ack = connection.send(payload);
+        if (!ack.isOk()) {
+            throw new RuntimeException("Engine rejected manual flush request: " + ack.getMsg());
         }
     }
 
