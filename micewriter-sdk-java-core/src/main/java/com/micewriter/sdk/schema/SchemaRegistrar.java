@@ -74,7 +74,7 @@ public class SchemaRegistrar {
         for (java.lang.reflect.Field f : clazz.getDeclaredFields()) {
             Map<String, Object> fieldDef = new LinkedHashMap<>();
             fieldDef.put("name", f.getName());
-            fieldDef.put("type", PojoInspector.javaTypeToIcebergType(f.getType()));
+            fieldDef.put("type", javaTypeToIcebergType(f.getType()));
             fieldDef.put("required", f.getType().isPrimitive()
                     || f.isAnnotationPresent(com.micewriter.sdk.annotation.IcebergId.class));
             fields.add(fieldDef);
@@ -101,5 +101,22 @@ public class SchemaRegistrar {
         payload[0] = type;
         System.arraycopy(body, 0, payload, 1, body.length);
         return payload;
+    }
+
+    private static String javaTypeToIcebergType(Class<?> type) {
+        if (type == String.class) return "string";
+        if (type == int.class || type == Integer.class) return "int";
+        if (type == long.class || type == Long.class) return "long";
+        if (type == double.class || type == Double.class) return "double";
+        if (type == float.class || type == Float.class) return "float";
+        if (type == boolean.class || type == Boolean.class) return "boolean";
+        if (type == byte[].class) return "binary";
+        if (java.time.Instant.class.isAssignableFrom(type) ||
+            java.time.OffsetDateTime.class.isAssignableFrom(type) ||
+            java.time.ZonedDateTime.class.isAssignableFrom(type)) return "timestamptz";
+        if (java.time.LocalDateTime.class.isAssignableFrom(type)) return "timestamp";
+        if (java.time.LocalDate.class.isAssignableFrom(type) ||
+            java.sql.Date.class.isAssignableFrom(type)) return "date";
+        return "string";
     }
 }

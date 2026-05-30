@@ -13,9 +13,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.Closeable;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -40,8 +42,8 @@ public class UdsConnection implements Closeable {
     private final EpollEventLoopGroup group = new EpollEventLoopGroup(1);
     private volatile Channel channel;
 
-    /** One slot per in-flight send; the response handler fills it. */
-    private final BlockingQueue<AckResponse> ackQueue = new LinkedBlockingQueue<>();
+    /** One slot per in-flight send; the response handler completes the future. */
+    private final ConcurrentLinkedQueue<CompletableFuture<AckResponse>> ackFutures = new ConcurrentLinkedQueue<>();
     private final ReentrantLock sendLock = new ReentrantLock();
 
     public UdsConnection(String socketPath, int connectTimeoutMs, int ackTimeoutMs) {
@@ -64,6 +66,9 @@ public class UdsConnection implements Closeable {
      * @throws RuntimeException on timeout, channel error, or engine-reported error
      */
     public AckResponse send(byte[] payload) {
+        CompletableFuture<AckResponse> future = new CompletableFuture<>();
+        ackFutures.offer(future);
+
         sendLock.lock();
         try {
             ensureConnected();
@@ -73,22 +78,23 @@ public class UdsConnection implements Closeable {
             buf.writeInt(payload.length);
             buf.writeBytes(payload);
 
-            channel.writeAndFlush(buf).sync();
+            channel.writeAndFlush(buf);
+        } catch (Exception e) {
+            ackFutures.remove(future);
+            throw new RuntimeException("IPC channel write failed", e);
+        } finally {
+            sendLock.unlock();
+        }
 
-            AckResponse ack = ackQueue.poll(ackTimeoutMs, TimeUnit.MILLISECONDS);
-            if (ack == null) {
-                throw new RuntimeException("micewriter-engine ACK timeout after " + ackTimeoutMs + "ms");
-            }
-            return ack;
+        try {
+            return future.get(ackTimeoutMs, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Interrupted while waiting for ACK", e);
-        } catch (RuntimeException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new RuntimeException("IPC send failed", e);
-        } finally {
-            sendLock.unlock();
+        } catch (TimeoutException e) {
+            throw new RuntimeException("micewriter-engine ACK timeout after " + ackTimeoutMs + "ms");
+        } catch (ExecutionException e) {
+            throw new RuntimeException("IPC send failed", e.getCause());
         }
     }
 
@@ -144,18 +150,32 @@ public class UdsConnection implements Closeable {
             byte[] bytes = new byte[msg.readableBytes()];
             msg.readBytes(bytes);
             AckResponse ack = objectMapper.readValue(bytes, AckResponse.class);
-            ackQueue.offer(ack);
+            CompletableFuture<AckResponse> future = ackFutures.poll();
+            if (future != null) {
+                future.complete(ack);
+            } else {
+                log.warn("Received unexpected ACK from engine");
+            }
         }
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
             log.error("UDS channel error: {}", cause.getMessage());
+            cancelPendingFutures(cause);
             ctx.close();
         }
 
         @Override
         public void channelInactive(ChannelHandlerContext ctx) {
             log.warn("UDS channel closed by engine");
+            cancelPendingFutures(new RuntimeException("UDS channel closed"));
+        }
+
+        private void cancelPendingFutures(Throwable cause) {
+            CompletableFuture<AckResponse> f;
+            while ((f = ackFutures.poll()) != null) {
+                f.completeExceptionally(cause);
+            }
         }
     }
 }

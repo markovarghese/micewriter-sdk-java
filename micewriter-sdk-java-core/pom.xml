@@ -40,14 +40,15 @@
             <artifactId>jackson-databind</artifactId>
         </dependency>
 
-        <!-- Arrow IPC for INGEST_RECORD hot-path serialization -->
+        <!-- CBOR for INGEST_RECORD hot-path serialization -->
         <dependency>
-            <groupId>org.apache.arrow</groupId>
-            <artifactId>arrow-vector</artifactId>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-cbor</artifactId>
         </dependency>
+
         <dependency>
-            <groupId>org.apache.arrow</groupId>
-            <artifactId>arrow-memory-netty</artifactId>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
         </dependency>
 
         <dependency>
