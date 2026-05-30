@@ -103,6 +103,16 @@ public class SchemaRegistrar {
         return payload;
     }
 
+    /**
+     * Map a Java type to its Iceberg type string.
+     *
+     * <p>Note for {@code timestamptz}: {@link java.time.Instant} and
+     * {@link java.time.OffsetDateTime} produce ISO-8601 with numeric offsets
+     * and are safe. {@link java.time.ZonedDateTime} may serialise with a
+     * named zone like {@code 2026-05-30T07:30Z[UTC]} which the engine
+     * cannot parse — see {@link com.micewriter.sdk.template.IcebergStreamTemplate}'s
+     * class-level docs.
+     */
     private static String javaTypeToIcebergType(Class<?> type) {
         if (type == String.class) return "string";
         if (type == int.class || type == Integer.class) return "int";

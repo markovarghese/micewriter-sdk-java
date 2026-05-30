@@ -26,6 +26,25 @@ import java.util.Locale;
  * Socket asynchronously.
  *
  * <p>The SDK is append-only. Row-level updates and deletes are not supported.
+ *
+ * <h2>Timestamp serialization</h2>
+ * Fields mapped to Iceberg {@code timestamptz} columns are CBOR-encoded as ISO-8601
+ * strings (Jackson is configured with {@code WRITE_DATES_AS_TIMESTAMPS=false}). The
+ * engine's arrow-json parser accepts numeric UTC offsets ({@code Z} or
+ * {@code +HH:MM}) but rejects named timezones like {@code "UTC"} or bracketed zone
+ * suffixes like {@code 2026-05-30T07:30Z[UTC]}.
+ *
+ * <p>Safe field types:
+ * <ul>
+ *   <li>{@link java.time.Instant} — always serialises as {@code ...Z}</li>
+ *   <li>{@link java.time.OffsetDateTime} — serialises with a numeric offset</li>
+ * </ul>
+ *
+ * <p>Avoid {@link java.time.ZonedDateTime} for {@code timestamptz} columns: depending
+ * on the Jackson version it may emit {@code 2026-05-30T07:30Z[UTC]} (or a similar
+ * bracketed zone), which the engine cannot parse and will cause the entire flush
+ * batch to be retained for retry. Convert to {@code Instant} or
+ * {@code OffsetDateTime} at the entity boundary.
  */
 public class IcebergStreamTemplate implements Closeable {
 
