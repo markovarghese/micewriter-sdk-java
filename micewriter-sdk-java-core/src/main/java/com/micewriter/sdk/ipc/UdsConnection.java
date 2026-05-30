@@ -67,7 +67,6 @@ public class UdsConnection implements Closeable {
      */
     public AckResponse send(byte[] payload) {
         CompletableFuture<AckResponse> future = new CompletableFuture<>();
-        ackFutures.offer(future);
 
         sendLock.lock();
         try {
@@ -78,9 +77,20 @@ public class UdsConnection implements Closeable {
             buf.writeInt(payload.length);
             buf.writeBytes(payload);
 
-            channel.writeAndFlush(buf);
+            // Enqueue the ack-future and hand the frame to the channel under
+            // the SAME lock. This guarantees ackFutures order matches the
+            // wire order — if we offered the future before the lock, two
+            // concurrent senders could queue futures in one order but write
+            // payloads in the other, and AckHandler would complete each
+            // future with the wrong sender's ACK.
+            ackFutures.offer(future);
+            try {
+                channel.writeAndFlush(buf);
+            } catch (Exception writeEx) {
+                ackFutures.remove(future);
+                throw writeEx;
+            }
         } catch (Exception e) {
-            ackFutures.remove(future);
             throw new RuntimeException("IPC channel write failed", e);
         } finally {
             sendLock.unlock();
