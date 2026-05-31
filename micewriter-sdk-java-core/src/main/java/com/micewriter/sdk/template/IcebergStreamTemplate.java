@@ -57,7 +57,7 @@ public class IcebergStreamTemplate implements Closeable {
     private static final byte MSG_FLUSH_NOW = 0x03;
 
     /** Matches {@code MAX_PAYLOAD_SIZE} enforced by the engine's UDS server. */
-    private static final int MAX_PAYLOAD_BYTES = 128 * 1024 * 1024;
+    private static final int MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 
     private final UdsConnection connection;
     private final ObjectMapper cborMapper;
@@ -105,7 +105,7 @@ public class IcebergStreamTemplate implements Closeable {
 
         if (payload.length > MAX_PAYLOAD_BYTES) {
             throw new IllegalArgumentException(
-                    "INGEST_RECORD payload (" + payload.length + " bytes) exceeds 128 MB limit");
+                    "INGEST_RECORD payload (" + payload.length + " bytes) exceeds 16 MB limit");
         }
 
         AckResponse ack = connection.send(payload);
