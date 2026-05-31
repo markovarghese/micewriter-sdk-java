@@ -66,46 +66,62 @@ public class UdsConnection implements Closeable {
      * @throws RuntimeException on timeout, channel error, or engine-reported error
      */
     public AckResponse send(byte[] payload) {
-        CompletableFuture<AckResponse> future = new CompletableFuture<>();
+        int maxAttempts = 2;
+        RuntimeException lastException = null;
 
-        sendLock.lock();
-        try {
-            ensureConnected();
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            CompletableFuture<AckResponse> future = new CompletableFuture<>();
 
-            // Frame = 4-byte big-endian length of payload + payload bytes.
-            ByteBuf buf = Unpooled.buffer(4 + payload.length);
-            buf.writeInt(payload.length);
-            buf.writeBytes(payload);
-
-            // Enqueue the ack-future and hand the frame to the channel under
-            // the SAME lock. This guarantees ackFutures order matches the
-            // wire order — if we offered the future before the lock, two
-            // concurrent senders could queue futures in one order but write
-            // payloads in the other, and AckHandler would complete each
-            // future with the wrong sender's ACK.
-            ackFutures.offer(future);
+            sendLock.lock();
             try {
-                channel.writeAndFlush(buf);
-            } catch (Exception writeEx) {
-                ackFutures.remove(future);
-                throw writeEx;
+                ensureConnected();
+
+                // Frame = 4-byte big-endian length of payload + payload bytes.
+                ByteBuf buf = Unpooled.buffer(4 + payload.length);
+                buf.writeInt(payload.length);
+                buf.writeBytes(payload);
+
+                // Enqueue the ack-future and hand the frame to the channel under
+                // the SAME lock. This guarantees ackFutures order matches the
+                // wire order — if we offered the future before the lock, two
+                // concurrent senders could queue futures in one order but write
+                // payloads in the other, and AckHandler would complete each
+                // future with the wrong sender's ACK.
+                ackFutures.offer(future);
+                try {
+                    channel.writeAndFlush(buf);
+                } catch (Exception writeEx) {
+                    ackFutures.remove(future);
+                    dropChannel();
+                    lastException = new RuntimeException("IPC channel write failed", writeEx);
+                    continue;
+                }
+            } catch (Exception e) {
+                dropChannel();
+                lastException = new RuntimeException("IPC channel setup failed", e);
+                continue;
+            } finally {
+                sendLock.unlock();
             }
-        } catch (Exception e) {
-            throw new RuntimeException("IPC channel write failed", e);
-        } finally {
-            sendLock.unlock();
+
+            try {
+                return future.get(ackTimeoutMs, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Interrupted while waiting for ACK", e);
+            } catch (TimeoutException e) {
+                ackFutures.remove(future);
+                dropChannel();
+                lastException = new RuntimeException("micewriter-engine ACK timeout after " + ackTimeoutMs + "ms", e);
+                log.warn("Send timed out, dropping channel (attempt {}/{})", attempt, maxAttempts);
+            } catch (ExecutionException e) {
+                dropChannel();
+                lastException = new RuntimeException("IPC send failed", e.getCause());
+                log.warn("Send failed, dropping channel (attempt {}/{})", attempt, maxAttempts);
+            }
         }
 
-        try {
-            return future.get(ackTimeoutMs, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException("Interrupted while waiting for ACK", e);
-        } catch (TimeoutException e) {
-            throw new RuntimeException("micewriter-engine ACK timeout after " + ackTimeoutMs + "ms");
-        } catch (ExecutionException e) {
-            throw new RuntimeException("IPC send failed", e.getCause());
-        }
+        throw lastException != null ? lastException : new RuntimeException("IPC send failed after retries");
     }
 
     @Override
@@ -152,6 +168,14 @@ public class UdsConnection implements Closeable {
         }
     }
 
+    private void dropChannel() {
+        Channel c = channel;
+        if (c != null) {
+            c.close();
+            channel = null;
+        }
+    }
+
     /** Netty inbound handler: deserialises each decoded ACK frame and queues it. */
     private class AckHandler extends SimpleChannelInboundHandler<ByteBuf> {
 
@@ -172,6 +196,7 @@ public class UdsConnection implements Closeable {
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
             log.error("UDS channel error: {}", cause.getMessage());
             cancelPendingFutures(cause);
+            dropChannel();
             ctx.close();
         }
 
@@ -179,6 +204,7 @@ public class UdsConnection implements Closeable {
         public void channelInactive(ChannelHandlerContext ctx) {
             log.warn("UDS channel closed by engine");
             cancelPendingFutures(new RuntimeException("UDS channel closed"));
+            dropChannel();
         }
 
         private void cancelPendingFutures(Throwable cause) {
