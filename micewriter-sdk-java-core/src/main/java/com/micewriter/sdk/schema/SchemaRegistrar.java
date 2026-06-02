@@ -9,6 +9,8 @@ import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 
 /**
  * Registers Iceberg table schemas with the micewriter-engine over UDS.
@@ -74,7 +76,7 @@ public class SchemaRegistrar {
         for (java.lang.reflect.Field f : clazz.getDeclaredFields()) {
             Map<String, Object> fieldDef = new LinkedHashMap<>();
             fieldDef.put("name", f.getName());
-            fieldDef.put("type", javaTypeToIcebergType(f.getType()));
+            fieldDef.put("type", javaTypeToIcebergType(f.getGenericType()));
             fieldDef.put("required", f.getType().isPrimitive()
                     || f.isAnnotationPresent(com.micewriter.sdk.annotation.IcebergId.class));
             fields.add(fieldDef);
@@ -113,20 +115,35 @@ public class SchemaRegistrar {
      * cannot parse — see {@link com.micewriter.sdk.template.IcebergStreamTemplate}'s
      * class-level docs.
      */
-    private static String javaTypeToIcebergType(Class<?> type) {
-        if (type == String.class) return "string";
-        if (type == int.class || type == Integer.class) return "int";
-        if (type == long.class || type == Long.class) return "long";
-        if (type == double.class || type == Double.class) return "double";
-        if (type == float.class || type == Float.class) return "float";
-        if (type == boolean.class || type == Boolean.class) return "boolean";
-        if (type == byte[].class) return "binary";
-        if (java.time.Instant.class.isAssignableFrom(type) ||
-            java.time.OffsetDateTime.class.isAssignableFrom(type) ||
-            java.time.ZonedDateTime.class.isAssignableFrom(type)) return "timestamptz";
-        if (java.time.LocalDateTime.class.isAssignableFrom(type)) return "timestamp";
-        if (java.time.LocalDate.class.isAssignableFrom(type) ||
-            java.sql.Date.class.isAssignableFrom(type)) return "date";
+    private static String javaTypeToIcebergType(Type type) {
+        if (type instanceof ParameterizedType) {
+            ParameterizedType pType = (ParameterizedType) type;
+            if (pType.getRawType() == java.util.List.class) {
+                Type innerType = pType.getActualTypeArguments()[0];
+                return "list(" + javaTypeToIcebergType(innerType) + ")";
+            }
+        }
+        
+        Class<?> clazz = null;
+        if (type instanceof Class<?>) {
+            clazz = (Class<?>) type;
+        } else {
+            return "string";
+        }
+
+        if (clazz == String.class) return "string";
+        if (clazz == int.class || clazz == Integer.class) return "int";
+        if (clazz == long.class || clazz == Long.class) return "long";
+        if (clazz == double.class || clazz == Double.class) return "double";
+        if (clazz == float.class || clazz == Float.class) return "float";
+        if (clazz == boolean.class || clazz == Boolean.class) return "boolean";
+        if (clazz == byte[].class) return "binary";
+        if (java.time.Instant.class.isAssignableFrom(clazz) ||
+            java.time.OffsetDateTime.class.isAssignableFrom(clazz) ||
+            java.time.ZonedDateTime.class.isAssignableFrom(clazz)) return "timestamptz";
+        if (java.time.LocalDateTime.class.isAssignableFrom(clazz)) return "timestamp";
+        if (java.time.LocalDate.class.isAssignableFrom(clazz) ||
+            java.sql.Date.class.isAssignableFrom(clazz)) return "date";
         return "string";
     }
 }
