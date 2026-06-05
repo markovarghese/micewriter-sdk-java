@@ -80,7 +80,7 @@ public class IcebergStreamTemplate implements Closeable {
      * </pre>
      *
      * @throws IllegalArgumentException if {@code entity} is not annotated with {@link IcebergEntity},
-     *                                  or if the serialized payload exceeds 128 MB
+     *                                  or if the serialized payload exceeds 16 MB
      * @throws RuntimeException         if the engine rejects the record or the ACK times out
      */
     public <T> void send(T entity) {
