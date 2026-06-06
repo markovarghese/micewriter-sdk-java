@@ -2,7 +2,6 @@ package com.micewriter.sdk.template;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.dataformat.cbor.CBORFactory;
 import com.micewriter.sdk.annotation.IcebergEntity;
 import com.micewriter.sdk.ipc.AckResponse;
 import com.micewriter.sdk.ipc.UdsConnection;
@@ -21,14 +20,14 @@ import java.util.Locale;
  * icebergTemplate.send(event);
  * }</pre>
  *
- * Each call serializes the POJO to CBOR format, frames it
+ * Each call serializes the POJO to JSON format, frames it
  * with the custom binary header the engine expects, writes it over the Unix Domain
  * Socket asynchronously.
  *
  * <p>The SDK is append-only. Row-level updates and deletes are not supported.
  *
  * <h2>Timestamp serialization</h2>
- * Fields mapped to Iceberg {@code timestamptz} columns are CBOR-encoded as ISO-8601
+ * Fields mapped to Iceberg {@code timestamptz} columns are JSON-encoded as ISO-8601
  * strings (Jackson is configured with {@code WRITE_DATES_AS_TIMESTAMPS=false}). The
  * engine's arrow-json parser accepts numeric UTC offsets ({@code Z} or
  * {@code +HH:MM}) but rejects named timezones like {@code "UTC"} or bracketed zone
@@ -60,11 +59,11 @@ public class IcebergStreamTemplate implements Closeable {
     private static final int MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 
     private final UdsConnection connection;
-    private final ObjectMapper cborMapper;
+    private final ObjectMapper jsonMapper;
 
     public IcebergStreamTemplate(UdsConnection connection) {
         this.connection = connection;
-        this.cborMapper = new ObjectMapper(new CBORFactory())
+        this.jsonMapper = new ObjectMapper()
                 .findAndRegisterModules()
                 .configure(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
     }
@@ -76,7 +75,7 @@ public class IcebergStreamTemplate implements Closeable {
      * <pre>
      *   [table_name_len : u16 big-endian]
      *   [table_name     : UTF-8 bytes]
-     *   [CBOR stream bytes]
+     *   [JSON stream bytes]
      * </pre>
      *
      * @throws IllegalArgumentException if {@code entity} is not annotated with {@link IcebergEntity},
@@ -86,20 +85,20 @@ public class IcebergStreamTemplate implements Closeable {
     public <T> void send(T entity) {
         byte[] tableNameBytes = IcebergEntityCache.getTableNameBytes(entity.getClass());
 
-        byte[] cborBytes;
+        byte[] jsonBytes;
         try {
-            cborBytes = cborMapper.writeValueAsBytes(entity);
+            jsonBytes = jsonMapper.writeValueAsBytes(entity);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to serialize entity to CBOR", e);
+            throw new RuntimeException("Failed to serialize entity to JSON", e);
         }
 
-        // [table_name_len u16][table_name][CBOR bytes]
+        // [table_name_len u16][table_name][JSON bytes]
         int headerLen = 2 + tableNameBytes.length;
-        byte[] body = new byte[headerLen + cborBytes.length];
+        byte[] body = new byte[headerLen + jsonBytes.length];
         body[0] = (byte) (tableNameBytes.length >> 8);
         body[1] = (byte) (tableNameBytes.length & 0xFF);
         System.arraycopy(tableNameBytes, 0, body, 2, tableNameBytes.length);
-        System.arraycopy(cborBytes, 0, body, headerLen, cborBytes.length);
+        System.arraycopy(jsonBytes, 0, body, headerLen, jsonBytes.length);
 
         byte[] payload = SchemaRegistrar.prependTypeByte(MSG_INGEST_RECORD, body);
 

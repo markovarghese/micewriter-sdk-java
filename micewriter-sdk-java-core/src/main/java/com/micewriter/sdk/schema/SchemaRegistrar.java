@@ -8,7 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CopyOnWriteArraySet;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 
@@ -30,24 +30,33 @@ public class SchemaRegistrar {
     private final UdsConnection connection;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    /** Guards against double-registration when called more than once. */
-    private final AtomicBoolean registered = new AtomicBoolean(false);
+    private final Set<Class<?>> registeredEntities = new CopyOnWriteArraySet<>();
 
     public SchemaRegistrar(UdsConnection connection) {
         this.connection = connection;
+        this.connection.addReconnectListener(() -> {
+            Class<?>[] classes = registeredEntities.toArray(new Class<?>[0]);
+            if (classes.length > 0) {
+                log.info("UDS reconnected — re-registering {} schemas", classes.length);
+                doRegister(classes);
+            }
+        });
     }
 
     /**
      * Register a fixed set of {@link IcebergEntity}-annotated classes.
-     * Idempotent — subsequent calls after the first are no-ops.
+     * Idempotent — subsequent calls with the same classes will re-register them,
+     * but usually this is called once by the framework.
      *
      * @param entityClasses classes annotated with {@link IcebergEntity}
      */
     public void register(Class<?>... entityClasses) {
-        if (!registered.compareAndSet(false, true)) {
-            return;
-        }
+        registeredEntities.addAll(Arrays.asList(entityClasses));
         log.info("Registering {} @IcebergEntity class(es)", entityClasses.length);
+        doRegister(entityClasses);
+    }
+
+    private void doRegister(Class<?>... entityClasses) {
         for (Class<?> clazz : entityClasses) {
             try {
                 registerSchema(clazz);

@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import java.io.Closeable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -45,6 +46,7 @@ public class UdsConnection implements Closeable {
     /** One slot per in-flight send; the response handler completes the future. */
     private final ConcurrentLinkedQueue<CompletableFuture<AckResponse>> ackFutures = new ConcurrentLinkedQueue<>();
     private final ReentrantLock sendLock = new ReentrantLock();
+    private final CopyOnWriteArrayList<Runnable> reconnectListeners = new CopyOnWriteArrayList<>();
 
     public UdsConnection(String socketPath, int connectTimeoutMs, int ackTimeoutMs) {
         this.socketPath = socketPath;
@@ -56,6 +58,10 @@ public class UdsConnection implements Closeable {
     // -------------------------------------------------------------------------
     // Public API
     // -------------------------------------------------------------------------
+
+    public void addReconnectListener(Runnable listener) {
+        reconnectListeners.add(listener);
+    }
 
     /**
      * Send a raw IPC payload (type discriminant byte + body) to the engine
@@ -165,6 +171,13 @@ public class UdsConnection implements Closeable {
         if (channel == null || !channel.isActive()) {
             log.warn("UDS channel is not active — reconnecting");
             connect();
+            for (Runnable r : reconnectListeners) {
+                try {
+                    r.run();
+                } catch (Exception e) {
+                    log.error("Reconnect listener failed", e);
+                }
+            }
         }
     }
 
