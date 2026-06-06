@@ -173,6 +173,6 @@ See [system-overview.md](../micewriter-hub/docs/system-overview.md) for the full
 ```powershell
 docker run --rm `
   -v "${PWD}:/project" -v "$env:USERPROFILE\.m2:/root/.m2" `
-  -w /project maven:3.9-eclipse-temurin-17 `
+  -w /project maven:3.9-eclipse-temurin-25 `
   mvn clean install
 ```

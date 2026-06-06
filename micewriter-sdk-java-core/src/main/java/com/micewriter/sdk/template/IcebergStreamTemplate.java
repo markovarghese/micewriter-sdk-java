@@ -89,6 +89,7 @@ public class IcebergStreamTemplate implements Closeable {
         try {
             jsonBytes = jsonMapper.writeValueAsBytes(entity);
         } catch (Exception e) {
+            e.printStackTrace();
             throw new RuntimeException("Failed to serialize entity to JSON", e);
         }
 

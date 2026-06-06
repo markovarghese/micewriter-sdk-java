@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Run via Docker (mvn not installed on host)
 docker run --rm `
   -v "${PWD}:/project" -v "$env:USERPROFILE\.m2:/root/.m2" `
-  -w /project maven:3.9-eclipse-temurin-17 `
+  -w /project maven:3.9-eclipse-temurin-25 `
   mvn clean install            # build all modules and install to local Maven repo
 
 # Single module
