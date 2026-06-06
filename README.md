@@ -1,34 +1,60 @@
 # micewriter-sdk-java
 
-Java SDK for the [mIceWriter telemetry ingestion pipeline](../micewriter-hub/README.md).
-Streams `@IcebergEntity`-annotated POJOs to the `micewriter-engine` sidecar over a Unix Domain
-Socket using Apache Arrow IPC encoding.
+Java SDK for the [mIceWriter telemetry ingestion ecosystem](../micewriter-hub/README.md).
+
+## Branches and Versioning
+
+This SDK maintains two active, parallel release lines:
+
+- **`main` branch (2.x.x)**: Uses gRPC over HTTP/2 to stream payloads to central per-table `micewriter-engine` pipelines.
+- **`v1` branch (1.x.x)**: Uses Unix Domain Sockets (UDS) and Apache Arrow IPC to stream payloads to a per-pod `micewriter-engine` sidecar.
+
+> [!TIP]
+> **Which one should I use?**
+> Use `2.x.x` for all new projects. The `1.x.x` line is maintained for legacy architectures where sidecar deployment and UDS transports are already established.
 
 ## Modules
 
-| Module | Artifact | Use when |
-|---|---|---|
-| **core** | `micewriter-sdk-java-core` | Framework-agnostic base — used transitively by both starters |
-| **spring** | `micewriter-sdk-java-spring` | Spring Boot applications |
-| **dropwizard** | `micewriter-sdk-java-dropwizard` | Dropwizard applications |
+We provide a Bill of Materials (BOM) to manage dependency versions. All modules are released together at the exact same version.
 
-All modules are in this repo and released together at the same version.
+| Module | Artifact | Purpose |
+|---|---|---|
+| **BOM** | `micewriter-sdk-bom` | Import this into your `<dependencyManagement>` to align versions |
+| **api** | `micewriter-sdk-java-api` | Contains *only* the `@IcebergEntity` and `@IcebergId` annotations (Zero dependencies). Use this in shared domain libraries! |
+| **core** | `micewriter-sdk-java-core` | Framework-agnostic client engine (transitively included by the starters) |
+| **spring** | `micewriter-sdk-java-spring` | Auto-configuration starter for Spring Boot applications |
+| **dropwizard** | `micewriter-sdk-java-dropwizard` | Bundle for Dropwizard applications |
 
 ---
 
 ## Spring Boot
 
-### Dependency
+### 1. Import the BOM and Dependency
+
+In your `pom.xml`, import the BOM so you don't need to specify versions for the starter:
 
 ```xml
-<dependency>
-    <groupId>com.micewriter</groupId>
-    <artifactId>micewriter-sdk-java-spring</artifactId>
-    <version>0.2.0</version>
-</dependency>
+<dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>com.micewriter</groupId>
+            <artifactId>micewriter-sdk-bom</artifactId>
+            <version>2.0.0</version> <!-- Use 1.x.x if using the v1 UDS architecture -->
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
+
+<dependencies>
+    <dependency>
+        <groupId>com.micewriter</groupId>
+        <artifactId>micewriter-sdk-java-spring</artifactId>
+    </dependency>
+</dependencies>
 ```
 
-### Annotate your entity
+### 2. Annotate your entity
 
 ```java
 @IcebergEntity(table = "telemetry_events", namespace = "analytics")
@@ -41,7 +67,7 @@ public class TelemetryEvent {
 }
 ```
 
-### Inject and send
+### 3. Inject and send
 
 ```java
 @Service
@@ -55,15 +81,17 @@ public class EventService {
 }
 ```
 
-### Configuration (`application.yml`)
+### 4. Configuration (`application.yml`)
+
+*(Note: If using v1, you will configure `socket-path` instead of `resolver`)*
 
 ```yaml
 micewriter:
-  socket-path: /var/run/app/iceberg.sock   # must match SOCKET_PATH in the engine
-  base-package: com.example.events         # narrows @IcebergEntity classpath scan
+  resolver: "engine-{table}.micewriter.svc:9090" # v2 gRPC endpoint template
+  base-package: com.example.events               # narrows @IcebergEntity classpath scan
   connect-timeout-ms: 5000
   ack-timeout-ms: 5000
-  enabled: true                            # set false to disable the SDK entirely
+  enabled: true                                  # set false to disable the SDK entirely
 ```
 
 Schema registration happens automatically on `ContextRefreshedEvent`. No code changes needed.
@@ -72,17 +100,30 @@ Schema registration happens automatically on `ContextRefreshedEvent`. No code ch
 
 ## Dropwizard
 
-### Dependency
+### 1. Import the BOM and Dependency
 
 ```xml
-<dependency>
-    <groupId>com.micewriter</groupId>
-    <artifactId>micewriter-sdk-java-dropwizard</artifactId>
-    <version>0.2.0</version>
-</dependency>
+<dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>com.micewriter</groupId>
+            <artifactId>micewriter-sdk-bom</artifactId>
+            <version>2.0.0</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
+
+<dependencies>
+    <dependency>
+        <groupId>com.micewriter</groupId>
+        <artifactId>micewriter-sdk-java-dropwizard</artifactId>
+    </dependency>
+</dependencies>
 ```
 
-### Add config to your Configuration class
+### 2. Add config to your Configuration class
 
 ```java
 public class AppConfig extends Configuration {
@@ -94,7 +135,7 @@ public class AppConfig extends Configuration {
 }
 ```
 
-### Register the bundle
+### 3. Register the bundle
 
 ```java
 public class App extends Application<AppConfig> {
@@ -115,35 +156,18 @@ public class App extends Application<AppConfig> {
 }
 ```
 
-### Configuration (`config.yml`)
+### 4. Configuration (`config.yml`)
 
 ```yaml
 micewriter:
-  socketPath: /var/run/app/iceberg.sock
+  resolver: "engine-{table}.micewriter.svc:9090"
   connectTimeoutMs: 5000
   ackTimeoutMs: 5000
 ```
 
-Schema registration and UDS lifecycle (connect on start, close on stop) are handled
-by the bundle automatically.
+Schema registration and lifecycle are handled by the bundle automatically.
 
 ---
-
-## Wire protocol
-
-Both starters produce identical IPC frames — the engine sees no difference.
-
-```
-[4-byte big-endian length][1-byte msg type][payload bytes]
-```
-
-| Message | Type byte | Payload encoding |
-|---|---|---|
-| `REGISTER_SCHEMA` | `0x01` | JSON `{ table, namespace, fields }` |
-| `INGEST_RECORD` | `0x02` | `[table_name_len u16][table_name UTF-8][schema_id i32=0][Arrow IPC stream]` |
-| ACK (engine → SDK) | — | JSON `{ status: "ok"\|"error", msg? }` |
-
-See [system-overview.md](../micewriter-hub/docs/system-overview.md) for the full protocol spec.
 
 ## Type mapping
 
@@ -159,14 +183,6 @@ See [system-overview.md](../micewriter-hub/docs/system-overview.md) for the full
 | `LocalDateTime` | `timestamp` | `Timestamp(µs)` | microseconds since epoch, no tz |
 | `LocalDate` | `date` | `Date32` | days since epoch |
 | `byte[]` | `binary` | `Binary` | |
-
-## Notes
-
-- **Linux only:** `UdsConnection` uses Netty Epoll. Running locally on Windows or macOS
-  requires WSL or a Docker container.
-- **Append-only:** Row-level updates and deletes are not supported by this SDK.
-- `IcebergStreamTemplate.send()` blocks until the engine ACKs the RocksDB write — this is a
-  local memory operation and completes in microseconds under normal conditions.
 
 ## Building
 
