@@ -1,0 +1,44 @@
+name: Enforce Version Branch rules
+
+on:
+  push:
+    branches:
+      - v1
+      - main
+  pull_request:
+    branches:
+      - v1
+      - main
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Check version matches branch
+        run: |
+          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          # Use GITHUB_BASE_REF for PRs (the target branch), or GITHUB_REF_NAME for direct pushes
+          BRANCH=${GITHUB_BASE_REF:-${GITHUB_REF_NAME}}
+          echo "Target Branch: $BRANCH, Version: $VERSION"
+          
+          if [[ "$BRANCH" == "v1" && ! "$VERSION" =~ ^1\. ]]; then
+            echo "::error::v1 branch must use 1.x.x version (current: $VERSION)"
+            exit 1
+          fi
+          
+          if [[ "$BRANCH" == "main" && ! "$VERSION" =~ ^2\. ]]; then
+            echo "::error::main branch must use 2.x.x version (current: $VERSION)"
+            exit 1
+          fi
+
+      - name: Verify build and dependencies
+        run: mvn -B verify

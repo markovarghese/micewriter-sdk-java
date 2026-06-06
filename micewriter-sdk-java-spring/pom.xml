@@ -7,7 +7,7 @@
     <parent>
         <groupId>com.micewriter</groupId>
         <artifactId>micewriter-sdk-java</artifactId>
-        <version>0.2.0</version>
+        <version>1.0.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>micewriter-sdk-java-spring</artifactId>
@@ -18,7 +18,6 @@
         <dependency>
             <groupId>com.micewriter</groupId>
             <artifactId>micewriter-sdk-java-core</artifactId>
-            <version>${project.version}</version>
         </dependency>
 
         <dependency>
