@@ -81,7 +81,8 @@ public class MicewriterBundle<T extends Configuration> implements ConfiguredBund
         UdsConnection connection = new UdsConnection(
                 cfg.getSocketPath(),
                 cfg.getConnectTimeoutMs(),
-                cfg.getAckTimeoutMs()
+                cfg.getAckTimeoutMs(),
+                cfg.getMaxInFlightBytes()
         );
         IcebergStreamTemplate localTemplate = new IcebergStreamTemplate(connection);
         SchemaRegistrar registrar = new SchemaRegistrar(connection);

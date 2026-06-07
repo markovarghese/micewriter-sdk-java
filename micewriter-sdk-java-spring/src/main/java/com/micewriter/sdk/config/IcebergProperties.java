@@ -23,6 +23,9 @@ public class IcebergProperties {
     /** How long to wait for an ACK from the engine before throwing (ms). */
     private int ackTimeoutMs = 5_000;
 
+    /** Max bytes of un-ACKed data-path sends held in memory (pipelining/backpressure window). */
+    private long maxInFlightBytes = 8L * 1024 * 1024;
+
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
 
@@ -37,4 +40,7 @@ public class IcebergProperties {
 
     public int getAckTimeoutMs() { return ackTimeoutMs; }
     public void setAckTimeoutMs(int ackTimeoutMs) { this.ackTimeoutMs = ackTimeoutMs; }
+
+    public long getMaxInFlightBytes() { return maxInFlightBytes; }
+    public void setMaxInFlightBytes(long maxInFlightBytes) { this.maxInFlightBytes = maxInFlightBytes; }
 }

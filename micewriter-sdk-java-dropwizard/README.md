@@ -76,7 +76,23 @@ micewriter:
   socketPath: /var/run/app/iceberg.sock
   connectTimeoutMs: 5000
   ackTimeoutMs: 5000
+  # Pipelining window: max un-ACKed bytes in flight (default 8 MiB).
+  # Set to several × your max payload size to allow effective concurrent sends.
+  maxInFlightBytes: 8388608
 ```
+
+### 5. Pipelined sends
+
+```java
+// In your resource/handler — call sendAsync instead of send to pipeline records:
+CompletableFuture<Void> f = micewriter.getTemplate().sendAsync(event);
+// ...attach callbacks or collect futures and await in batch
+```
+
+`sendAsync` allows multiple records to be in flight before their ACKs arrive,
+breaking the single-caller throughput ceiling. The in-flight byte budget bounds
+host memory; the caller blocks only when the budget is exhausted. Errors surface
+via the returned future.
 
 ## How it works
 

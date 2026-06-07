@@ -43,6 +43,10 @@ public class MicewriterConfig {
     @JsonProperty
     private int ackTimeoutMs = 5_000;
 
+    @Min(1)
+    @JsonProperty
+    private long maxInFlightBytes = 8L * 1024 * 1024;
+
     public String getSocketPath() { return socketPath; }
     public void setSocketPath(String socketPath) { this.socketPath = socketPath; }
 
@@ -51,4 +55,7 @@ public class MicewriterConfig {
 
     public int getAckTimeoutMs() { return ackTimeoutMs; }
     public void setAckTimeoutMs(int ackTimeoutMs) { this.ackTimeoutMs = ackTimeoutMs; }
+
+    public long getMaxInFlightBytes() { return maxInFlightBytes; }
+    public void setMaxInFlightBytes(long maxInFlightBytes) { this.maxInFlightBytes = maxInFlightBytes; }
 }

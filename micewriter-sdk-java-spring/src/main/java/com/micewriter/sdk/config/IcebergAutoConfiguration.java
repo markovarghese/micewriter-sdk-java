@@ -27,7 +27,8 @@ public class IcebergAutoConfiguration {
         return new UdsConnection(
                 props.getSocketPath(),
                 props.getConnectTimeoutMs(),
-                props.getAckTimeoutMs()
+                props.getAckTimeoutMs(),
+                props.getMaxInFlightBytes()
         );
     }
 

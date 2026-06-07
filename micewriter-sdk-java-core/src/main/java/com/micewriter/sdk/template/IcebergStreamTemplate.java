@@ -5,26 +5,36 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.micewriter.sdk.annotation.IcebergEntity;
 import com.micewriter.sdk.ipc.AckResponse;
 import com.micewriter.sdk.ipc.UdsConnection;
-import com.micewriter.sdk.schema.SchemaRegistrar;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
-import java.nio.charset.StandardCharsets;
-import java.util.Locale;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Primary SDK entry point for application code.
  *
  * <pre>{@code
+ * // Synchronous (one record at a time):
  * icebergTemplate.send(event);
+ *
+ * // Pipelined / non-blocking (multiple records in flight):
+ * CompletableFuture<Void> f = icebergTemplate.sendAsync(event);
  * }</pre>
  *
  * Each call serializes the POJO to JSON format, frames it
  * with the custom binary header the engine expects, writes it over the Unix Domain
- * Socket asynchronously.
+ * Socket.
  *
  * <p>The SDK is append-only. Row-level updates and deletes are not supported.
+ *
+ * <h2>Async pipelining ({@link #sendAsync})</h2>
+ * {@link #sendAsync} returns immediately after acquiring an in-flight permit and writing
+ * the frame; the caller can fire many sends before any ACKs arrive. The connection's
+ * in-flight byte budget (default 8 MiB) bounds host heap: when the budget is exhausted
+ * the calling thread blocks briefly until an ACK clears a slot. Exceptions surface via
+ * the returned future rather than being thrown on the calling thread.
  *
  * <h2>Timestamp serialization</h2>
  * Fields mapped to Iceberg {@code timestamptz} columns are JSON-encoded as ISO-8601
@@ -69,7 +79,7 @@ public class IcebergStreamTemplate implements Closeable {
     }
 
     /**
-     * Stream a single {@link IcebergEntity}-annotated POJO to the engine.
+     * Stream a single {@link IcebergEntity}-annotated POJO to the engine (synchronous).
      *
      * <p>Wire format after the 4-byte length prefix and 1-byte discriminant (0x02):
      * <pre>
@@ -78,40 +88,32 @@ public class IcebergStreamTemplate implements Closeable {
      *   [JSON stream bytes]
      * </pre>
      *
-     * @throws IllegalArgumentException if {@code entity} is not annotated with {@link IcebergEntity},
-     *                                  or if the serialized payload exceeds 16 MB
+     * @throws IllegalArgumentException if the serialized payload exceeds 16 MB
      * @throws RuntimeException         if the engine rejects the record or the ACK times out
      */
     public <T> void send(T entity) {
-        byte[] tableNameBytes = IcebergEntityCache.getTableNameBytes(entity.getClass());
-
-        byte[] jsonBytes;
-        try {
-            jsonBytes = jsonMapper.writeValueAsBytes(entity);
-        } catch (Exception e) {
-            e.printStackTrace();
-            throw new RuntimeException("Failed to serialize entity to JSON", e);
-        }
-
-        // [table_name_len u16][table_name][JSON bytes]
-        int headerLen = 2 + tableNameBytes.length;
-        byte[] body = new byte[headerLen + jsonBytes.length];
-        body[0] = (byte) (tableNameBytes.length >> 8);
-        body[1] = (byte) (tableNameBytes.length & 0xFF);
-        System.arraycopy(tableNameBytes, 0, body, 2, tableNameBytes.length);
-        System.arraycopy(jsonBytes, 0, body, headerLen, jsonBytes.length);
-
-        byte[] payload = SchemaRegistrar.prependTypeByte(MSG_INGEST_RECORD, body);
-
-        if (payload.length > MAX_PAYLOAD_BYTES) {
-            throw new IllegalArgumentException(
-                    "INGEST_RECORD payload (" + payload.length + " bytes) exceeds 16 MB limit");
-        }
-
+        byte[] payload = buildIngestPayload(entity);
         AckResponse ack = connection.send(payload);
-        if (!ack.isOk()) {
-            throw new RuntimeException("Engine rejected record: " + ack.getMsg());
-        }
+        if (!ack.isOk()) throw new RuntimeException("Engine rejected record: " + ack.getMsg());
+    }
+
+    /**
+     * Pipelined, non-blocking send. Returns a future completed when the engine ACKs.
+     *
+     * <p>Blocks the caller only when the connection's in-flight byte budget is full
+     * (natural backpressure). Multiple outstanding futures can be in flight concurrently,
+     * letting throughput exceed the single-caller ACK-round-trip ceiling.
+     *
+     * <p>Any error (timeout, channel drop, engine rejection) completes the returned future
+     * exceptionally — it is not thrown on the calling thread.
+     *
+     * @throws IllegalArgumentException if the serialized payload exceeds 16 MB
+     */
+    public <T> CompletableFuture<Void> sendAsync(T entity) {
+        byte[] payload = buildIngestPayload(entity);
+        return connection.sendAsync(payload).thenAccept(ack -> {
+            if (!ack.isOk()) throw new RuntimeException("Engine rejected record: " + ack.getMsg());
+        });
     }
 
     /**
@@ -130,6 +132,31 @@ public class IcebergStreamTemplate implements Closeable {
 
     @Override
     public void close() {
-        // No native allocator to close anymore
+        // No native allocator to close
+    }
+
+    /**
+     * Builds [type=0x02][tableNameLen u16][tableName][JSON] in one pass,
+     * streaming JSON directly into the frame buffer (no redundant full-payload copies).
+     */
+    private <T> byte[] buildIngestPayload(T entity) {
+        byte[] tableNameBytes = IcebergEntityCache.getTableNameBytes(entity.getClass());
+        ByteArrayOutputStream baos =
+            new ByteArrayOutputStream(3 + tableNameBytes.length + 1024);
+        try {
+            baos.write(MSG_INGEST_RECORD);
+            baos.write((tableNameBytes.length >> 8) & 0xFF);
+            baos.write(tableNameBytes.length & 0xFF);
+            baos.write(tableNameBytes, 0, tableNameBytes.length);
+            jsonMapper.writeValue(baos, entity);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to serialize entity to JSON", e);
+        }
+        byte[] payload = baos.toByteArray();
+        if (payload.length > MAX_PAYLOAD_BYTES) {
+            throw new IllegalArgumentException(
+                "INGEST_RECORD payload (" + payload.length + " bytes) exceeds 16 MB limit");
+        }
+        return payload;
     }
 }
