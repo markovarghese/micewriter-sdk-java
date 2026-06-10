@@ -40,22 +40,22 @@ public class EventService {
     @Autowired
     private IcebergStreamTemplate icebergTemplate;
 
-    // Synchronous — blocks until ACK:
-    public void record(TelemetryEvent event) {
-        icebergTemplate.send(event);
+    // Pipelined with automatic retry (recommended):
+    public CompletableFuture<Void> record(TelemetryEvent event) {
+        return icebergTemplate.sendAsyncWithRetry(event);  // 3 attempts, 100 ms → 200 ms backoff
     }
 
-    // Pipelined — non-blocking, multiple sends in flight at once:
-    public CompletableFuture<Void> recordAsync(TelemetryEvent event) {
-        return icebergTemplate.sendAsync(event);
+    // Custom retry policy:
+    public CompletableFuture<Void> recordWithPolicy(TelemetryEvent event) {
+        return icebergTemplate.sendAsyncWithRetry(event, /*maxAttempts*/ 5, /*initialMs*/ 50, /*maxMs*/ 10_000);
     }
 }
 ```
 
-`sendAsync` allows multiple records to be in flight before their ACKs arrive,
-breaking the single-caller throughput ceiling. The in-flight byte budget
-(default 8 MiB) bounds host memory: the caller blocks only when the budget is
-exhausted. Errors surface via the returned future rather than as thrown exceptions.
+`sendAsyncWithRetry` pipelines multiple records before their ACKs arrive (breaking the
+single-caller throughput ceiling) and retries with exponential backoff on channel drops or
+timeouts. The in-flight byte budget (default 8 MiB, see `max-in-flight-bytes`) bounds host
+memory. Errors surface via the returned future only after all retry attempts are exhausted.
 
 ### 3. Configure
 
@@ -76,5 +76,6 @@ micewriter:
 
 On `ContextRefreshedEvent`, `SpringSchemaRegistrar` classpath-scans for `@IcebergEntity`
 classes and calls `SchemaRegistrar.register()` which sends a `REGISTER_SCHEMA` (0x01)
-JSON message to the engine for each class. After that, every `send()` call serialises the
-POJO as an Arrow IPC RecordBatch and sends it as `INGEST_RECORD` (0x02).
+JSON message to the engine for each class. After that, every `sendAsyncWithRetry()` call
+serialises the POJO as JSON and sends it as `INGEST_RECORD` (0x02), pipelining up to
+`max-in-flight-bytes` of unacknowledged data and retrying automatically on transient errors.

@@ -51,6 +51,7 @@ class FakeUdsEngine implements AutoCloseable {
 
     private final AtomicInteger receivedCount = new AtomicInteger();
     private final List<byte[]> receivedPayloads = new CopyOnWriteArrayList<>();
+    private final AtomicInteger acksToSkip = new AtomicInteger(0);
 
     FakeUdsEngine(String socketPath) throws InterruptedException {
         this(socketPath, 0, true, Integer.MAX_VALUE);
@@ -97,6 +98,13 @@ class FakeUdsEngine implements AutoCloseable {
     /** Release n pending ACK permits, unblocking that many held ACK tasks. */
     void releaseAcks(int n) { ackGate.release(n); }
 
+    /**
+     * Cause the next {@code n} received frames to receive no ACK.
+     * The client's ackTimeoutMs will fire, drop the channel, and complete
+     * the send future exceptionally — simulating a real timeout for retry tests.
+     */
+    void skipNextAcks(int n) { acksToSkip.set(n); }
+
     /** Block until at least {@code count} frames have been received, or the timeout elapses. */
     boolean awaitFrames(int count, long timeout, TimeUnit unit) throws InterruptedException {
         long deadline = System.currentTimeMillis() + unit.toMillis(timeout);
@@ -140,6 +148,9 @@ class FakeUdsEngine implements AutoCloseable {
                 ackExecutor.submit(() -> {
                     try {
                         ackGate.acquire();
+                        // If skipNextAcks(n) was called, silently drop this ACK.
+                        // The client's ackTimeoutMs will fire and complete the future exceptionally.
+                        if (acksToSkip.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) return;
                         if (ackDelayMs > 0) Thread.sleep(ackDelayMs);
                         ByteBuf response = Unpooled.buffer(4 + ACK_OK.length);
                         response.writeInt(ACK_OK.length);

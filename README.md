@@ -75,23 +75,44 @@ public class EventService {
     @Autowired
     private IcebergStreamTemplate icebergTemplate;
 
-    public void record(TelemetryEvent event) {
-        icebergTemplate.send(event);   // blocks until engine ACKs RocksDB append
+    // Pipelined with automatic retry (recommended):
+    public CompletableFuture<Void> record(TelemetryEvent event) {
+        return icebergTemplate.sendAsyncWithRetry(event);  // 3 attempts, 100 ms → 200 ms backoff
+    }
+
+    // Custom retry policy:
+    public CompletableFuture<Void> recordWithPolicy(TelemetryEvent event) {
+        return icebergTemplate.sendAsyncWithRetry(event, /*maxAttempts*/ 5, /*initialMs*/ 50, /*maxMs*/ 10_000);
     }
 }
 ```
 
+`sendAsyncWithRetry` pipelines multiple records before their ACKs arrive (breaking the
+single-caller throughput ceiling) and retries with exponential backoff on channel drops or
+timeouts. The in-flight byte budget (default 8 MiB, see `max-in-flight-bytes`) bounds host
+heap. Errors surface via the returned future only after all retry attempts are exhausted.
+
 ### 4. Configuration (`application.yml`)
 
-*(Note: If using v1, you will configure `socket-path` instead of `resolver`)*
+*(Note: If using v1, configure `socket-path` instead of `resolver`. The `max-in-flight-bytes` setting is v1-only.)*
 
 ```yaml
+# v2 (gRPC):
 micewriter:
-  resolver: "engine-{table}.micewriter.svc:9090" # v2 gRPC endpoint template
-  base-package: com.example.events               # narrows @IcebergEntity classpath scan
+  resolver: "engine-{table}.micewriter.svc:9090"
+  base-package: com.example.events
   connect-timeout-ms: 5000
   ack-timeout-ms: 5000
-  enabled: true                                  # set false to disable the SDK entirely
+  enabled: true
+
+# v1 (UDS sidecar):
+micewriter:
+  socket-path: /var/run/app/iceberg.sock
+  base-package: com.example.events
+  connect-timeout-ms: 5000
+  ack-timeout-ms: 5000
+  max-in-flight-bytes: 8388608   # pipelining window; set to several × max payload size
+  enabled: true
 ```
 
 Schema registration happens automatically on `ContextRefreshedEvent`. No code changes needed.

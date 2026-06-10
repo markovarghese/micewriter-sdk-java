@@ -81,18 +81,23 @@ micewriter:
   maxInFlightBytes: 8388608
 ```
 
-### 5. Pipelined sends
+### 5. Pipelined sends with retry
 
 ```java
-// In your resource/handler — call sendAsync instead of send to pipeline records:
-CompletableFuture<Void> f = micewriter.getTemplate().sendAsync(event);
-// ...attach callbacks or collect futures and await in batch
+// In your resource/handler:
+IcebergStreamTemplate template = micewriter.getTemplate();
+
+// Pipelined with automatic retry (recommended):
+CompletableFuture<Void> f = template.sendAsyncWithRetry(event);  // 3 attempts, 100 ms → 200 ms backoff
+
+// Custom retry policy:
+CompletableFuture<Void> f2 = template.sendAsyncWithRetry(event, /*maxAttempts*/ 5, /*initialMs*/ 50, /*maxMs*/ 10_000);
 ```
 
-`sendAsync` allows multiple records to be in flight before their ACKs arrive,
-breaking the single-caller throughput ceiling. The in-flight byte budget bounds
-host memory; the caller blocks only when the budget is exhausted. Errors surface
-via the returned future.
+`sendAsyncWithRetry` pipelines multiple records before their ACKs arrive (breaking the
+single-caller throughput ceiling) and retries with exponential backoff on channel drops or
+timeouts. The in-flight byte budget (default 8 MiB, see `maxInFlightBytes`) bounds host
+memory. Errors surface via the returned future only after all retry attempts are exhausted.
 
 ## How it works
 
@@ -101,6 +106,9 @@ via the returned future.
 On server start, `Managed.start()` calls `SchemaRegistrar.register(entityClasses)` which
 sends `REGISTER_SCHEMA` (0x01) for each declared entity class.
 On server stop, `Managed.stop()` closes the Arrow allocator and Netty channel cleanly.
+Every `sendAsyncWithRetry()` call serialises the POJO as JSON and sends it as
+`INGEST_RECORD` (0x02), pipelining up to `maxInFlightBytes` of unacknowledged data and
+retrying automatically on transient errors.
 
 Unlike the Spring starter, entity classes must be listed **explicitly** via `.entities(…)`
 because Dropwizard does not provide a classpath scanner.

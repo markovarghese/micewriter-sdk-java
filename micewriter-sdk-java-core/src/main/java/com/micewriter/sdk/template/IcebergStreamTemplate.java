@@ -11,16 +11,17 @@ import org.slf4j.LoggerFactory;
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Primary SDK entry point for application code.
  *
  * <pre>{@code
- * // Synchronous (one record at a time):
- * icebergTemplate.send(event);
+ * // Pipelined with automatic retry (recommended for data path):
+ * icebergTemplate.sendAsyncWithRetry(event);
  *
- * // Pipelined / non-blocking (multiple records in flight):
- * CompletableFuture<Void> f = icebergTemplate.sendAsync(event);
+ * // Pipelined without retry (caller handles errors):
+ * icebergTemplate.sendAsync(event);
  * }</pre>
  *
  * Each call serializes the POJO to JSON format, frames it
@@ -29,12 +30,15 @@ import java.util.concurrent.CompletableFuture;
  *
  * <p>The SDK is append-only. Row-level updates and deletes are not supported.
  *
- * <h2>Async pipelining ({@link #sendAsync})</h2>
- * {@link #sendAsync} returns immediately after acquiring an in-flight permit and writing
- * the frame; the caller can fire many sends before any ACKs arrive. The connection's
- * in-flight byte budget (default 8 MiB) bounds host heap: when the budget is exhausted
- * the calling thread blocks briefly until an ACK clears a slot. Exceptions surface via
- * the returned future rather than being thrown on the calling thread.
+ * <h2>Async pipelining ({@link #sendAsyncWithRetry} / {@link #sendAsync})</h2>
+ * Both methods return immediately after acquiring an in-flight permit and writing the frame;
+ * the caller can fire many sends before any ACKs arrive. The connection's in-flight byte
+ * budget (default 8 MiB) bounds host heap: when the budget is exhausted the calling thread
+ * blocks briefly until an ACK clears a slot. Exceptions surface via the returned future.
+ *
+ * <p>{@link #sendAsyncWithRetry} adds bounded retry with exponential backoff on top of
+ * {@link #sendAsync} — prefer it for data-path sends. {@link #sendAsync} is the primitive
+ * for callers that need custom retry or error-handling policy.
  *
  * <h2>Timestamp serialization</h2>
  * Fields mapped to Iceberg {@code timestamptz} columns are JSON-encoded as ISO-8601
@@ -90,7 +94,11 @@ public class IcebergStreamTemplate implements Closeable {
      *
      * @throws IllegalArgumentException if the serialized payload exceeds 16 MB
      * @throws RuntimeException         if the engine rejects the record or the ACK times out
+     * @deprecated Use {@link #sendAsyncWithRetry(Object)} instead, which pipelines sends
+     *             and provides configurable retry with exponential backoff. This method will
+     *             be removed in the next major version.
      */
+    @Deprecated
     public <T> void send(T entity) {
         byte[] payload = buildIngestPayload(entity);
         AckResponse ack = connection.send(payload);
@@ -117,6 +125,38 @@ public class IcebergStreamTemplate implements Closeable {
     }
 
     /**
+     * Pipelined send with bounded retry and exponential backoff.
+     *
+     * <p>On any failure (channel drop, timeout, engine rejection), waits
+     * {@code initialDelayMs} then retries, doubling the delay each attempt up to
+     * {@code maxDelayMs}. After {@code maxAttempts} total attempts the returned
+     * future completes exceptionally.
+     *
+     * <p>Retry is safe: failed sends release their in-flight permits and the connection
+     * reconnects (re-registering schemas via the existing reconnect listener) before
+     * the next attempt.
+     *
+     * @param maxAttempts    total attempts including the first (≥ 1)
+     * @param initialDelayMs delay before the first retry in milliseconds
+     * @param maxDelayMs     cap on retry delay in milliseconds
+     * @throws IllegalArgumentException if the serialized payload exceeds 16 MB
+     */
+    public <T> CompletableFuture<Void> sendAsyncWithRetry(
+            T entity, int maxAttempts, long initialDelayMs, long maxDelayMs) {
+        return sendAsyncAttempt(entity, 1, maxAttempts, initialDelayMs, maxDelayMs);
+    }
+
+    /**
+     * Pipelined send with retry using sensible defaults: 3 attempts,
+     * 100 ms initial delay doubling up to 2 s.
+     *
+     * @throws IllegalArgumentException if the serialized payload exceeds 16 MB
+     */
+    public <T> CompletableFuture<Void> sendAsyncWithRetry(T entity) {
+        return sendAsyncWithRetry(entity, 3, 100, 2_000);
+    }
+
+    /**
      * Force the engine to immediately compile and commit all buffered records.
      * This is intended for end-to-end testing synchronization.
      *
@@ -133,6 +173,24 @@ public class IcebergStreamTemplate implements Closeable {
     @Override
     public void close() {
         // No native allocator to close
+    }
+
+    private <T> CompletableFuture<Void> sendAsyncAttempt(
+            T entity, int attempt, int maxAttempts, long delayMs, long maxDelayMs) {
+        return sendAsync(entity).exceptionallyCompose(ex -> {
+            if (attempt >= maxAttempts) {
+                CompletableFuture<Void> failed = new CompletableFuture<>();
+                failed.completeExceptionally(
+                    new RuntimeException("sendAsync failed after " + maxAttempts + " attempt(s)", ex));
+                return failed;
+            }
+            log.warn("sendAsync attempt {}/{} failed: {}; retrying in {} ms",
+                     attempt, maxAttempts, ex.getMessage(), delayMs);
+            long nextDelay = Math.min(delayMs * 2, maxDelayMs);
+            return CompletableFuture
+                .runAsync(() -> {}, CompletableFuture.delayedExecutor(delayMs, TimeUnit.MILLISECONDS))
+                .thenCompose(__ -> sendAsyncAttempt(entity, attempt + 1, maxAttempts, nextDelay, maxDelayMs));
+        });
     }
 
     /**

@@ -9,7 +9,12 @@ import org.junit.jupiter.api.condition.OS;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.*;
@@ -214,6 +219,68 @@ class AsyncPipeliningTest {
     }
 
     // -------------------------------------------------------------------------
+    // Tests 8-10: sendAsyncWithRetry — exponential backoff
+    // -------------------------------------------------------------------------
+
+    @Test
+    void retrySucceedsOnFirstAttempt() throws Exception {
+        String path = FakeUdsEngine.tmpSocketPath();
+        try (FakeUdsEngine engine = new FakeUdsEngine(path);
+             UdsConnection conn = new UdsConnection(path, 5_000, 5_000);
+             IcebergStreamTemplate template = new IcebergStreamTemplate(conn)) {
+
+            CompletableFuture<Void> f = template.sendAsyncWithRetry(new TestEvent("r", "ok"));
+            f.get(5, TimeUnit.SECONDS);
+
+            assertThat(f).isCompleted();
+            assertThat(engine.receivedCount()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void retrySucceedsAfterOneFailure() throws Exception {
+        int ackTimeoutMs = 200;
+        String path = FakeUdsEngine.tmpSocketPath();
+        // Skip the first ACK → client times out → retries → second ACK succeeds.
+        try (FakeUdsEngine engine = new FakeUdsEngine(path);
+             UdsConnection conn = new UdsConnection(path, 5_000, ackTimeoutMs);
+             IcebergStreamTemplate template = new IcebergStreamTemplate(conn)) {
+
+            engine.skipNextAcks(1);
+
+            // 3 attempts, 50 ms initial delay — fast enough for a unit test.
+            CompletableFuture<Void> f = template.sendAsyncWithRetry(
+                    new TestEvent("r", "retry"), 3, 50, 500);
+            f.get(5, TimeUnit.SECONDS);
+
+            assertThat(f).isCompleted();
+            // Server received the first (unACKed) frame plus the retry frame.
+            assertThat(engine.receivedCount()).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void retryExhaustedCompletesExceptionally() throws Exception {
+        int ackTimeoutMs = 200;
+        String path = FakeUdsEngine.tmpSocketPath();
+        // Never ACK any frame — all 2 attempts will time out.
+        try (FakeUdsEngine engine = new FakeUdsEngine(path);
+             UdsConnection conn = new UdsConnection(path, 5_000, ackTimeoutMs);
+             IcebergStreamTemplate template = new IcebergStreamTemplate(conn)) {
+
+            engine.skipNextAcks(99);
+
+            CompletableFuture<Void> f = template.sendAsyncWithRetry(
+                    new TestEvent("r", "exhaust"), 2, 50, 500);
+
+            assertThatThrownBy(() -> f.get(5, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .cause()
+                .hasMessageContaining("failed after 2 attempt(s)");
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Test 7: Payload wire format correctness
     // -------------------------------------------------------------------------
 
@@ -245,6 +312,103 @@ class AsyncPipeliningTest {
                                      java.nio.charset.StandardCharsets.UTF_8);
             assertThat(json).contains("\"id\"").contains("\"abc\"");
             assertThat(json).contains("\"data\"").contains("\"hello\"");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Tests 11-12: concurrent multi-thread producers (the load-generator path)
+    //
+    // The multi-threaded load generator fires sends from N threads at once, so
+    // the connection must stay correct under concurrency: every send completes
+    // (no future orphaned or cross-completed by the FIFO ack-matching), the
+    // engine receives exactly the number of frames sent, and the in-flight
+    // permit budget is fully restored (no permit leak). These also implicitly
+    // exercise concurrent JSON serialization through the shared ObjectMapper.
+    // -------------------------------------------------------------------------
+
+    @Test
+    void concurrentSendAsyncFromManyThreadsIsSafe() throws Exception {
+        int threads = 8;
+        int perThread = 50;
+        int total = threads * perThread;
+        long budget = 10L * 1024 * 1024; // generous — many small frames in flight at once
+
+        String path = FakeUdsEngine.tmpSocketPath();
+        try (FakeUdsEngine engine = new FakeUdsEngine(path);
+             UdsConnection conn = new UdsConnection(path, 5_000, 5_000, budget);
+             IcebergStreamTemplate template = new IcebergStreamTemplate(conn)) {
+
+            ExecutorService pool = Executors.newFixedThreadPool(threads);
+            CountDownLatch startGate = new CountDownLatch(1);
+            List<CompletableFuture<Void>> futures = new CopyOnWriteArrayList<>();
+            List<Future<?>> issued = new ArrayList<>();
+
+            for (int t = 0; t < threads; t++) {
+                final int tid = t;
+                issued.add(pool.submit(() -> {
+                    startGate.await();                 // release all threads simultaneously
+                    for (int i = 0; i < perThread; i++) {
+                        futures.add(template.sendAsync(new TestEvent("t" + tid + "-" + i, "data")));
+                    }
+                    return null;
+                }));
+            }
+            startGate.countDown();
+            for (Future<?> f : issued) f.get(10, TimeUnit.SECONDS); // wait for all sends to be issued
+            pool.shutdown();
+
+            // Every send completes successfully.
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get(20, TimeUnit.SECONDS);
+            assertThat(futures).hasSize(total).allSatisfy(f -> assertThat(f).isCompleted());
+
+            // Exactly `total` frames reached the engine.
+            assertThat(engine.receivedCount()).isEqualTo(total);
+
+            // No permit leak under concurrency — budget fully restored.
+            assertThat(conn.availablePermitCount())
+                .as("all in-flight permits released after concurrent sends")
+                .isEqualTo((int) Math.min(budget, Integer.MAX_VALUE));
+        }
+    }
+
+    @Test
+    void concurrentSendAsyncWithRetryFromManyThreadsIsSafe() throws Exception {
+        int threads = 8;
+        int perThread = 25;
+        int total = threads * perThread;
+        long budget = 10L * 1024 * 1024;
+
+        String path = FakeUdsEngine.tmpSocketPath();
+        try (FakeUdsEngine engine = new FakeUdsEngine(path);
+             UdsConnection conn = new UdsConnection(path, 5_000, 5_000, budget);
+             IcebergStreamTemplate template = new IcebergStreamTemplate(conn)) {
+
+            ExecutorService pool = Executors.newFixedThreadPool(threads);
+            CountDownLatch startGate = new CountDownLatch(1);
+            List<CompletableFuture<Void>> futures = new CopyOnWriteArrayList<>();
+            List<Future<?>> issued = new ArrayList<>();
+
+            for (int t = 0; t < threads; t++) {
+                final int tid = t;
+                issued.add(pool.submit(() -> {
+                    startGate.await();
+                    for (int i = 0; i < perThread; i++) {
+                        futures.add(template.sendAsyncWithRetry(new TestEvent("t" + tid + "-" + i, "data")));
+                    }
+                    return null;
+                }));
+            }
+            startGate.countDown();
+            for (Future<?> f : issued) f.get(10, TimeUnit.SECONDS);
+            pool.shutdown();
+
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get(20, TimeUnit.SECONDS);
+            assertThat(futures).hasSize(total).allSatisfy(f -> assertThat(f).isCompleted());
+
+            // No failures injected → no retries → exactly `total` frames, permits restored.
+            assertThat(engine.receivedCount()).isEqualTo(total);
+            assertThat(conn.availablePermitCount())
+                .isEqualTo((int) Math.min(budget, Integer.MAX_VALUE));
         }
     }
 }
