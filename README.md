@@ -27,6 +27,12 @@ We provide a Bill of Materials (BOM) to manage dependency versions. All modules 
 
 ---
 
+## 🚨 Troubleshooting & Known Issues
+
+### 1. Startup Race Condition
+**Issue:** The SDK connects before the Engine socket exists, leading to dropped connections or timeouts on startup.
+**Workaround:** Currently, applications should implement connection retries or use an init container to wait for the `/var/run/app/iceberg.sock` file to be created before starting the JVM. This will be addressed structurally in a future release.
+
 ## Spring Boot
 
 ### 1. Import the BOM and Dependency
