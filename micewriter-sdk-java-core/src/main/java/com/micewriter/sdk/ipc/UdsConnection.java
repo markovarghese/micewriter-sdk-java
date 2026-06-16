@@ -84,7 +84,7 @@ public class UdsConnection implements Closeable {
         this.maxInFlightBytes = maxInFlightBytes;
         int permits = (int) Math.min(maxInFlightBytes, Integer.MAX_VALUE);
         this.inFlightBytes = new Semaphore(permits, true);
-        connect();
+        // connect() is called lazily on first send to allow out-of-order startup in K8s
     }
 
     // -------------------------------------------------------------------------
